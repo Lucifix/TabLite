@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Lucifix/TabLite/releases/latest"><img src="https://img.shields.io/github/v/release/Lucifix/TabLite?label=download&color=34c759" alt="Download the latest release"></a>
   <img src="https://img.shields.io/badge/macOS-10.15%2B-111111" alt="macOS 10.15+">
   <img src="https://img.shields.io/badge/Intel%20%2B%20Apple%20Silicon-universal-5b5bd6" alt="Universal: Intel and Apple Silicon">
   <img src="https://img.shields.io/badge/Swift-5.9-f05138?logo=swift&logoColor=white" alt="Swift 5.9">
@@ -51,7 +52,19 @@ A quick tap of the shortcut jumps straight back to your previous window.
 
 ## Install
 
-TabLite is built from source. You need the Xcode Command Line Tools (`xcode-select --install`).
+### Download
+
+1. Download **`TabLite-x.y.z.zip`** from the [latest release](https://github.com/Lucifix/TabLite/releases/latest). It's universal (Intel + Apple Silicon).
+2. Unzip it and move **TabLite.app** to your **Applications** folder.
+3. Open it. The first time, macOS will warn that it can't verify the developer, because TabLite isn't notarized by Apple (that requires a paid Apple Developer account). To open it anyway:
+   - **macOS 15 and later:** close the warning, go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to TabLite.
+   - **macOS 14 and earlier:** Control-click **TabLite.app**, choose **Open**, then click **Open** again.
+
+You only need to do this once. Prefer to check the code yourself? Build it from source instead.
+
+### Build from source
+
+You need the Xcode Command Line Tools (`xcode-select --install`).
 
 ```bash
 git clone https://github.com/Lucifix/TabLite.git
@@ -116,7 +129,7 @@ macOS ties permissions to the app's code signature. Without a certificate, every
 | Path | What |
 |---|---|
 | `main.swift` | The whole app |
-| `build.sh` | Builds and signs `TabLite.app` |
+| `build.sh` | Builds and signs `TabLite.app`. `./build.sh --zip` also packages `dist/TabLite-<version>.zip` for a release |
 | `icon/make_icon.swift` | Draws the app icon in code. Regenerate with `swift icon/make_icon.swift` |
 | `docs/screenshot.html` | Source of the README illustration. Re-render with `docs/render-screenshots.sh` |
 
