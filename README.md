@@ -19,8 +19,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshot-dark.jpg">
-    <img src="docs/screenshot-light.jpg" width="900" alt="TabLite's glass panel showing live previews of five open windows, with the second one selected">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-dark.jpg">
+    <img src="assets/screenshot-light.jpg" width="900" alt="TabLite's glass panel showing live previews of five open windows, with the second one selected">
   </picture>
   <br>
   <sub>Illustration</sub>
@@ -140,7 +140,7 @@ macOS ties permissions to the app's code signature. Without a certificate, every
 | `main.swift` | The whole app |
 | `build.sh` | Builds and signs `TabLite.app`. `./build.sh --zip` also packages `dist/TabLite-<version>.zip` for a release |
 | `icon/make_icon.swift` | Draws the app icon in code. Regenerate with `swift icon/make_icon.swift` |
-| `docs/screenshot.html` | Source of the README illustration. Re-render with `docs/render-screenshots.sh` |
+| `assets/` | Images used in this README |
 
 `TabLite.app/Contents/MacOS/TabLite --list` prints the windows the switcher would show.
 
