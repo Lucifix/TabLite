@@ -495,6 +495,58 @@ private let kLeft: Int64 = 123, kRight: Int64 = 124, kDown: Int64 = 125, kUp: In
 private var swallowed = Set<Int64>()
 private var tapPort: CFMachPort?
 
+// MARK: - Shortcut (Option+Tab or Command+Tab)
+
+enum Shortcut: String {
+    case option, command
+    var flag: CGEventFlags { self == .option ? .maskAlternate : .maskCommand }
+    /// Modifiers that must not be held for the shortcut to fire (Shift is allowed: it goes backwards).
+    var excluded: CGEventFlags { self == .option ? [.maskCommand, .maskControl] : [.maskAlternate, .maskControl] }
+    var title: String { self == .option ? "Option+Tab" : "Command+Tab" }
+    static var saved: Shortcut {
+        get { Shortcut(rawValue: UserDefaults.standard.string(forKey: "shortcut") ?? "") ?? .option }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "shortcut") }
+    }
+}
+
+/// Active shortcut, cached so the event tap never touches UserDefaults.
+private var trigger = Shortcut.saved
+
+/// Private SkyLight function that turns macOS's own Command+Tab app switcher on or off
+/// (symbolic hotkey 1 = Command+Tab, 2 = Command+Shift+Tab; lasts until logout).
+/// Looked up at runtime: if a future macOS removes it, the Command+Tab option is simply unavailable.
+private typealias SetHotKeyFn = @convention(c) (Int32, Bool) -> CGError
+private let setSymbolicHotKeyEnabled: SetHotKeyFn? = {
+    let handle = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY)
+    guard let sym = dlsym(handle ?? UnsafeMutableRawPointer(bitPattern: -2), "CGSSetSymbolicHotKeyEnabled")
+    else { return nil }
+    return unsafeBitCast(sym, to: SetHotKeyFn.self)
+}()
+var commandTabAvailable: Bool { setSymbolicHotKeyEnabled != nil }
+
+func setSystemCommandTab(enabled: Bool) {
+    _ = setSymbolicHotKeyEnabled?(1, enabled)
+    _ = setSymbolicHotKeyEnabled?(2, enabled)
+}
+
+/// Apply the saved shortcut. macOS's Command+Tab is only turned off once our event tap is
+/// running, so Command+Tab never ends up doing nothing (e.g. before Accessibility is granted).
+func applyShortcut() {
+    trigger = commandTabAvailable ? Shortcut.saved : .option
+    setSystemCommandTab(enabled: !(trigger == .command && tapPort != nil))
+}
+
+/// Hand Command+Tab back to macOS if TabLite is killed or crashes.
+func installRestoreHandlers() {
+    for sig in [SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGABRT, SIGILL, SIGTRAP, SIGSEGV, SIGBUS, SIGFPE] {
+        signal(sig) { s in
+            setSystemCommandTab(enabled: true)
+            signal(s, SIG_DFL)
+            raise(s)
+        }
+    }
+}
+
 private let tapCallback: CGEventTapCallBack = { _, type, event, _ in
     let pass = Unmanaged.passUnretained(event)
     switch type {
@@ -506,18 +558,18 @@ private let tapCallback: CGEventTapCallBack = { _, type, event, _ in
     case .keyDown:
         let key = event.getIntegerValueField(.keyboardEventKeycode)
         let f = event.flags
-        let optionHeld = f.contains(.maskAlternate)
+        let modHeld = f.contains(trigger.flag)
         let shift = f.contains(.maskShift)
 
         if !switcher.active {
-            if key == kTab && optionHeld && !f.contains(.maskCommand) && !f.contains(.maskControl) {
+            if key == kTab && modHeld && f.intersection(trigger.excluded).isEmpty {
                 switcher.begin(reverse: shift)
                 if switcher.active { swallowed.insert(key); return nil }
                 return nil
             }
             return pass
         }
-        if !optionHeld { switcher.cancel(); return pass }   // missed the release; never get stuck
+        if !modHeld { switcher.cancel(); return pass }   // missed the release; never get stuck
         switch key {
         case kTab:   switcher.move(by: shift ? -1 : 1)
         case kLeft:  switcher.move(by: -1)
@@ -536,7 +588,7 @@ private let tapCallback: CGEventTapCallBack = { _, type, event, _ in
         return pass
 
     case .flagsChanged:
-        if switcher.active && !event.flags.contains(.maskAlternate) { switcher.commit() }
+        if switcher.active && !event.flags.contains(trigger.flag) { switcher.commit() }
         return pass
 
     default:
@@ -591,12 +643,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !switcher.canCapture { CGRequestScreenCaptureAccess() }
         switcher.warmUp()
 
-        if !installTap() {
+        installRestoreHandlers()
+        if installTap() {
+            applyShortcut()
+        } else {
+            applyShortcut()   // tap not running yet: makes sure macOS keeps its own Command+Tab
             // Accessibility not granted yet: keep trying so no relaunch is needed after granting.
             retry = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] t in
-                if installTap() { t.invalidate(); self?.retry = nil }
+                if installTap() { t.invalidate(); self?.retry = nil; applyShortcut() }
             }
         }
+    }
+
+    func applicationWillTerminate(_ n: Notification) {
+        setSystemCommandTab(enabled: true)   // always hand Command+Tab back to macOS
+    }
+
+    @objc func chooseShortcut(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let s = Shortcut(rawValue: raw) else { return }
+        Shortcut.saved = s
+        applyShortcut()
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -609,6 +675,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             open.target = self
             let re = menu.addItem(withTitle: "Restart TabLite (after granting)", action: #selector(restart), keyEquivalent: "r")
             re.target = self
+        }
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Shortcut", action: nil, keyEquivalent: "")
+        for s in [Shortcut.option, .command] {
+            let available = s == .option || commandTabAvailable
+            let it = menu.addItem(withTitle: "Switch with \(s.title)\(available ? "" : " (not available)")",
+                                  action: available ? #selector(chooseShortcut(_:)) : nil, keyEquivalent: "")
+            it.target = self
+            it.representedObject = s.rawValue
+            it.state = trigger == s ? .on : .off
+            it.indentationLevel = 1
         }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit TabLite", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")

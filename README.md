@@ -41,14 +41,23 @@
 
 | Keys | Action |
 |---|---|
-| Hold **⌥ Option**, press **Tab** | Open the switcher, then move to the next window |
+| Hold **⌥ Option** (or **⌘ Command**), press **Tab** | Open the switcher, then move to the next window |
 | **⇧ Shift+Tab** &nbsp;/&nbsp; **← →** | Previous / next window |
 | **↑ ↓** | Move between rows |
-| Release **⌥ Option** | Switch to the selected window |
+| Release **⌥ Option** / **⌘ Command** | Switch to the selected window |
 | **Esc** | Cancel |
 | Click a preview | Switch to that window |
 
 A quick tap of the shortcut jumps straight back to your previous window.
+
+### Option+Tab or Command+Tab
+
+Pick your shortcut from the TabLite menu bar icon: **Switch with Option+Tab** (default) or **Switch with Command+Tab**.
+
+With Command+Tab, TabLite replaces the macOS app switcher while it's running, and hands Command+Tab back to macOS when you switch back to Option+Tab, quit, or if TabLite crashes. After a Force Quit, the macOS switcher comes back when you open TabLite again or log out. Two things to know:
+
+- It switches between **windows**, not apps.
+- While you're typing in a **password field**, macOS hides keystrokes from all apps, so Command+Tab does nothing until you click elsewhere.
 
 ## Install
 
@@ -140,7 +149,8 @@ macOS ties permissions to the app's code signature. Without a certificate, every
 ## Limitations
 
 - Shows windows on the current Space only. Minimized windows aren't listed.
-- The shortcut is fixed to Option+Tab for now. Another app using Option+Tab will conflict with it.
+- Another app using the same shortcut will conflict with it.
+- Taking over Command+Tab relies on a private macOS function. If a future macOS removes it, the Command+Tab option shows as unavailable and Option+Tab keeps working.
 
 ## License
 
