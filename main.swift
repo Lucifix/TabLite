@@ -696,9 +696,128 @@ enum LaunchAtLogin {
     }
 }
 
+// MARK: - Updates
+
+/// Check for Updates: asks GitHub for the latest release, only when you choose it from the menu
+/// (TabLite makes no other network requests). A newer release can be downloaded, checked and
+/// swapped in place of this TabLite.app, and then TabLite relaunches.
+enum Updater {
+    struct Release { let version: String; let page: URL; let zip: URL? }
+
+    struct Failure: LocalizedError {
+        let errorDescription: String?
+        init(_ message: String) { errorDescription = message }
+    }
+
+    private struct GitHubRelease: Decodable {
+        struct Asset: Decodable { let name: String; let browser_download_url: URL }
+        let tag_name: String
+        let html_url: URL
+        let assets: [Asset]
+    }
+
+    private static let latestURL = URL(string: "https://api.github.com/repos/Lucifix/TabLite/releases/latest")!
+    static var currentVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    }
+    /// The copy of TabLite that's running; this is what an update replaces.
+    static var appURL: URL { Bundle.main.bundleURL }
+
+    /// Compares dotted versions numerically, so "1.0.10" is newer than "1.0.9".
+    static func isNewer(_ a: String, than b: String) -> Bool {
+        let x = a.split(separator: ".").map { Int($0) ?? 0 }, y = b.split(separator: ".").map { Int($0) ?? 0 }
+        for i in 0..<max(x.count, y.count) {
+            let l = i < x.count ? x[i] : 0, r = i < y.count ? y[i] : 0
+            if l != r { return l > r }
+        }
+        return false
+    }
+
+    /// Why the update can't replace this TabLite.app, or nil if it can.
+    static var cantInstallReason: String? {
+        if appURL.path.contains("/AppTranslocation/") {
+            return "macOS is running TabLite from a temporary, read-only location. Move TabLite.app to your Applications folder, open it from there, and check again."
+        }
+        let folder = appURL.deletingLastPathComponent().path
+        if !FileManager.default.isWritableFile(atPath: folder) {
+            return "You don't have permission to replace TabLite.app in \(folder)."
+        }
+        return nil
+    }
+
+    /// Fetches the latest published release. Calls back on the main thread.
+    static func latest(_ done: @escaping (Result<Release, Error>) -> Void) {
+        var req = URLRequest(url: latestURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: req) { data, response, error in
+            let result = Result<Release, Error>(catching: {
+                if let error = error { throw error }
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard status == 200, let data = data else {
+                    throw Failure(status == 404 ? "No release has been published yet." : "GitHub answered with HTTP \(status).")
+                }
+                let r = try JSONDecoder().decode(GitHubRelease.self, from: data)
+                let zip = r.assets.first { $0.name.hasPrefix("TabLite-") && $0.name.hasSuffix(".zip") }
+                let version = r.tag_name.hasPrefix("v") ? String(r.tag_name.dropFirst()) : r.tag_name
+                return Release(version: version, page: r.html_url, zip: zip?.browser_download_url)
+            })
+            DispatchQueue.main.async { done(result) }
+        }.resume()
+    }
+
+    /// Downloads the release zip, checks it's an intact TabLite of the expected version, and swaps
+    /// it in place of this TabLite.app. Calls back on the main thread with nil on success.
+    static func install(_ release: Release, _ done: @escaping (Error?) -> Void) {
+        let finish = { (e: Error?) in DispatchQueue.main.async { done(e) } }
+        guard let zipURL = release.zip else { return finish(Failure("This release has no download attached.")) }
+        URLSession.shared.downloadTask(with: zipURL) { file, response, error in
+            do {
+                if let error = error { throw error }
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard status == 200, let file = file else { throw Failure("The download failed (HTTP \(status)).") }
+                // Unpack on the same volume as the app, so the final swap is a quick rename.
+                let fm = FileManager.default
+                let work = try fm.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: appURL, create: true)
+                defer { try? fm.removeItem(at: work) }
+                let zip = work.appendingPathComponent("update.zip")
+                try fm.moveItem(at: file, to: zip)
+                try run("/usr/bin/ditto", ["-x", "-k", zip.path, work.path], else: "Couldn't unzip the download.")
+
+                let newApp = work.appendingPathComponent("TabLite.app")
+                guard let bundle = Bundle(url: newApp), bundle.bundleIdentifier == Bundle.main.bundleIdentifier else {
+                    throw Failure("The download doesn't contain TabLite.app.")
+                }
+                let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+                guard version == release.version else {
+                    throw Failure("The download is version \(version), but \(release.version) was expected.")
+                }
+                try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", newApp.path],
+                        else: "The downloaded app is damaged (its code signature doesn't match its contents).")
+                _ = try fm.replaceItemAt(appURL, withItemAt: newApp)
+                finish(nil)
+            } catch {
+                finish(error)
+            }
+        }.resume()
+    }
+
+    private static func run(_ tool: String, _ args: [String], else message: String) throws {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: tool)
+        p.arguments = args
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0 else { throw Failure(message) }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var item: NSStatusItem!
     var retry: Timer?
+    /// Menu title while an update is being checked or downloaded; nil when idle.
+    var updateStatus: String?
 
     func applicationDidFinishLaunching(_ n: Notification) {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -767,18 +886,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         login.target = self
         login.state = LaunchAtLogin.isEnabled ? .on : .off
         menu.addItem(.separator())
+        // Greyed out (no action) while a check or download is running.
+        let update = menu.addItem(withTitle: updateStatus ?? "Check for Updates…",
+                                  action: updateStatus == nil ? #selector(checkForUpdates) : nil, keyEquivalent: "")
+        update.target = self
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit TabLite", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    }
+
+    /// Shows an alert and returns the index of the button that was clicked.
+    @discardableResult
+    func alert(_ title: String, _ text: String, buttons: [String] = ["OK"]) -> Int {
+        let a = NSAlert()
+        a.messageText = title
+        a.informativeText = text
+        for b in buttons { a.addButton(withTitle: b) }
+        NSApp.activate(ignoringOtherApps: true)
+        return a.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
     }
 
     @objc func toggleLaunchAtLogin() {
         do {
             try LaunchAtLogin.set(!LaunchAtLogin.isEnabled)
         } catch {
-            let alert = NSAlert()
-            alert.messageText = "Couldn't change Launch at Login"
-            alert.informativeText = error.localizedDescription
-            NSApp.activate(ignoringOtherApps: true)
-            alert.runModal()
+            alert("Couldn't change Launch at Login", error.localizedDescription)
+        }
+    }
+
+    @objc func checkForUpdates() {
+        updateStatus = "Checking for Updates…"
+        Updater.latest { [weak self] result in
+            guard let self = self else { return }
+            self.updateStatus = nil
+            switch result {
+            case .failure(let error):
+                self.alert("Couldn't check for updates", error.localizedDescription)
+            case .success(let release) where !Updater.isNewer(release.version, than: Updater.currentVersion):
+                self.alert("TabLite is up to date", "Version \(Updater.currentVersion) is the latest version.")
+            case .success(let release):
+                self.offerUpdate(release)
+            }
+        }
+    }
+
+    func offerUpdate(_ release: Updater.Release) {
+        let title = "TabLite \(release.version) is available"
+        let current = "You have version \(Updater.currentVersion)."
+        if let reason = release.zip == nil ? "This release has no download attached." : Updater.cantInstallReason {
+            if alert(title, "\(current)\n\n\(reason)", buttons: ["Open Release Page", "Later"]) == 0 {
+                NSWorkspace.shared.open(release.page)
+            }
+            return
+        }
+        let text = "\(current) TabLite will download the new version, replace itself and restart.\n\n"
+            + "If the shortcut or previews stop working afterwards, turn TabLite off and on again in "
+            + "System Settings → Privacy & Security → Accessibility and Screen Recording."
+        switch alert(title, text, buttons: ["Install and Restart", "Release Notes", "Later"]) {
+        case 0: installUpdate(release)
+        case 1: NSWorkspace.shared.open(release.page)
+        default: break
+        }
+    }
+
+    func installUpdate(_ release: Updater.Release) {
+        updateStatus = "Downloading TabLite \(release.version)…"
+        Updater.install(release) { [weak self] error in
+            guard let self = self else { return }
+            self.updateStatus = nil
+            guard let error = error else { return self.restart() }
+            let text = "\(error.localizedDescription)\n\nYou can download it from the release page instead."
+            if self.alert("Couldn't install the update", text, buttons: ["Open Release Page", "Close"]) == 0 {
+                NSWorkspace.shared.open(release.page)
+            }
         }
     }
 
@@ -790,7 +969,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func restart() {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
-        p.arguments = ["-c", "sleep 0.5; /usr/bin/open \"$0\"", Bundle.main.bundlePath]
+        // Wait until this process has fully quit, so `open` starts a fresh copy instead of finding this one.
+        p.arguments = ["-c", "while kill -0 \"$1\" 2>/dev/null; do sleep 0.1; done; /usr/bin/open \"$0\"",
+                       Bundle.main.bundlePath, String(getpid())]
         try? p.run()
         NSApp.terminate(nil)
     }

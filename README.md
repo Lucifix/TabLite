@@ -35,7 +35,7 @@
 - **Live previews.** See what's in each window before you switch to it.
 - **Glass that fits your Mac.** Liquid Glass on macOS 26 and frosted glass on older versions. Follows Light and Dark mode.
 - **Featherweight.** No CPU use while idle: no polling, no timers, no background work.
-- **Private.** No network access, no analytics, no accounts.
+- **Private.** No analytics, no accounts. The only network request is **Check for Updates**, and only when you choose it.
 
 ## Usage
 
@@ -102,6 +102,12 @@ Then choose **Restart TabLite** from its menu bar icon.
 ### Launch at Login
 
 To have TabLite running whenever you start your Mac, choose **Launch at Login** from its menu bar icon. Keep the app in **Applications** first, since macOS remembers where it was when you turned this on.
+
+### Updates
+
+Choose **Check for Updates…** from the TabLite menu bar icon. TabLite asks GitHub for the latest release and, if there's a newer version, offers to install it: it downloads the release, checks it, replaces TabLite.app and restarts. It never checks on its own.
+
+If the shortcut or previews stop working after an update, turn TabLite off and on again in **System Settings → Privacy & Security → Accessibility** and **Screen Recording**. Releases aren't signed with an Apple Developer certificate, so macOS may see each version as a new app.
 
 ## Why it's fast
 
