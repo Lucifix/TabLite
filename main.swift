@@ -10,6 +10,7 @@
 import Cocoa
 import ApplicationServices
 import ScreenCaptureKit   // weak-linked (see build.sh): only used on macOS 14+
+import ServiceManagement  // SMAppService (macOS 13+) for Launch at Login
 
 // Private but long-stable API: AXUIElement -> CGWindowID
 @_silgen_name("_AXUIElementGetWindow")
@@ -627,6 +628,42 @@ func menuBarIcon() -> NSImage {
     return img
 }
 
+// MARK: - Launch at Login
+
+/// Opens TabLite when you log in. macOS 13+: the system's own login item (SMAppService), which
+/// shows up in System Settings → General → Login Items. Older macOS: a per-user LaunchAgent.
+enum LaunchAtLogin {
+    private static let label = "io.github.lucifix.tablite"
+    private static var agentURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/\(label).plist")
+    }
+
+    static var isEnabled: Bool {
+        if #available(macOS 13.0, *) { return SMAppService.mainApp.status == .enabled }
+        return FileManager.default.fileExists(atPath: agentURL.path)
+    }
+
+    static func set(_ on: Bool) throws {
+        if #available(macOS 13.0, *) {
+            if on {
+                try SMAppService.mainApp.register()
+                // The user can block login items in System Settings; send them there to allow it.
+                if SMAppService.mainApp.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } else if on {
+            let plist: [String: Any] = ["Label": label,
+                                        "ProgramArguments": ["/usr/bin/open", Bundle.main.bundlePath],
+                                        "RunAtLoad": true]
+            try FileManager.default.createDirectory(at: agentURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: agentURL, options: .atomic)
+        } else if FileManager.default.fileExists(atPath: agentURL.path) {
+            try FileManager.default.removeItem(at: agentURL)
+        }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var item: NSStatusItem!
     var retry: Timer?
@@ -688,7 +725,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             it.indentationLevel = 1
         }
         menu.addItem(.separator())
+        let login = menu.addItem(withTitle: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        login.target = self
+        login.state = LaunchAtLogin.isEnabled ? .on : .off
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit TabLite", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    }
+
+    @objc func toggleLaunchAtLogin() {
+        do {
+            try LaunchAtLogin.set(!LaunchAtLogin.isEnabled)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't change Launch at Login"
+            alert.informativeText = error.localizedDescription
+            NSApp.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
     }
 
     @objc func openPrivacy() {

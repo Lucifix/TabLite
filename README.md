@@ -95,6 +95,10 @@ On first launch, allow TabLite in **System Settings → Privacy & Security**:
 
 Then choose **Restart TabLite** from its menu bar icon.
 
+### Launch at Login
+
+To have TabLite running whenever you start your Mac, choose **Launch at Login** from its menu bar icon. Keep the app in **Applications** first, since macOS remembers where it was when you turned this on.
+
 ## Why it's fast
 
 - **Zero idle cost.** A single keyboard event tap; nothing runs until you press the shortcut.
