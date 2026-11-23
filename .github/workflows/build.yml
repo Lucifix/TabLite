@@ -1,0 +1,43 @@
+# Builds TabLite on macOS for every push and pull request, so compile errors show up without a Mac.
+# Pushing a tag like v1.0.2 also publishes a GitHub release with TabLite-<version>.zip attached.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: write   # only used by the release step, which runs on tags
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build universal app and zip
+        run: ./build.sh --zip
+
+      - name: Check the tag matches the version in build.sh
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(grep -m1 '^VERSION=' build.sh | cut -d= -f2)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match VERSION=$version in build.sh"
+            exit 1
+          fi
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/TabLite-*.zip --title "TabLite ${GITHUB_REF_NAME#v}" --generate-notes
+
+      - name: Upload build
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: TabLite
+          path: dist/TabLite-*.zip
