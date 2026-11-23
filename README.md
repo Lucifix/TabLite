@@ -50,6 +50,10 @@
 
 A quick tap of the shortcut jumps straight back to your previous window.
 
+### Multiple displays
+
+The switcher opens on the display your mouse pointer is on. By default it lists windows from every display. To list only the windows on that display, turn on **Only show windows on the current display** in the TabLite menu bar icon. A window that spans two displays counts as being on the one that shows most of it.
+
 ### Option+Tab or Command+Tab
 
 Pick your shortcut from the TabLite menu bar icon: **Switch with Option+Tab** (default) or **Switch with Command+Tab**.
