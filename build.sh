@@ -4,8 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 APP=TabLite.app
-VERSION=1.0.1
-BUILD_NUMBER=2
+VERSION=1.0.2
+BUILD_NUMBER=3
 rm -rf "$APP" .build && mkdir -p "$APP/Contents/MacOS" .build
 
 for arch in x86_64 arm64; do
