@@ -530,7 +530,7 @@ enum Shortcut: String {
     var flag: CGEventFlags { self == .option ? .maskAlternate : .maskCommand }
     /// Modifiers that must not be held for the shortcut to fire (Shift is allowed: it goes backwards).
     var excluded: CGEventFlags { self == .option ? [.maskCommand, .maskControl] : [.maskAlternate, .maskControl] }
-    var title: String { self == .option ? "Option+Tab" : "Command+Tab" }
+    var title: String { self == .option ? "⌥ Option+Tab" : "⌘ Command+Tab" }
     static var saved: Shortcut {
         get { Shortcut(rawValue: UserDefaults.standard.string(forKey: "shortcut") ?? "") ?? .option }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: "shortcut") }
@@ -857,25 +857,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        let about = menu.addItem(withTitle: "About TabLite", action: #selector(showAbout), keyEquivalent: "")
+        about.target = self
+        menu.addItem(.separator())
+
+        // Permissions only appear while something is missing, as actionable items.
         let ax = AXIsProcessTrusted(), sr = CGPreflightScreenCaptureAccess()
-        menu.addItem(withTitle: "Accessibility: \(ax ? "✓" : "✗ needed for hotkey + raising windows")", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "Screen Recording: \(sr ? "✓" : "✗ needed for thumbnails + titles")", action: nil, keyEquivalent: "")
-        if !ax || !sr {
-            let open = menu.addItem(withTitle: "Open Privacy Settings…", action: #selector(openPrivacy), keyEquivalent: "")
-            open.target = self
-            let re = menu.addItem(withTitle: "Restart TabLite (after granting)", action: #selector(restart), keyEquivalent: "r")
+        if !ax {
+            addWarning(menu, "Grant Accessibility Access…", toolTip: "Needed for the shortcut and for raising windows",
+                       action: #selector(openAccessibility))
+        }
+        if !sr {
+            addWarning(menu, "Grant Screen Recording Access…", toolTip: "Needed for window previews and titles",
+                       action: #selector(openScreenRecording))
+        }
+        // Screen Recording only takes effect after a relaunch (Accessibility is picked up automatically).
+        if !sr || !switcher.canCapture {
+            let re = menu.addItem(withTitle: sr ? "Restart TabLite to Enable Previews" : "Restart TabLite After Granting",
+                                  action: #selector(restart), keyEquivalent: "")
             re.target = self
         }
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Shortcut", action: nil, keyEquivalent: "")
+        if !ax || !sr || !switcher.canCapture { menu.addItem(.separator()) }
+
+        if #available(macOS 14, *) {
+            menu.addItem(.sectionHeader(title: "Shortcut"))
+        } else {
+            menu.addItem(withTitle: "Shortcut", action: nil, keyEquivalent: "")
+        }
         for s in [Shortcut.option, .command] {
             let available = s == .option || commandTabAvailable
-            let it = menu.addItem(withTitle: "Switch with \(s.title)\(available ? "" : " (not available)")",
+            let it = menu.addItem(withTitle: "\(s.title)\(available ? "" : " (not available)")",
                                   action: available ? #selector(chooseShortcut(_:)) : nil, keyEquivalent: "")
             it.target = self
             it.representedObject = s.rawValue
             it.state = trigger == s ? .on : .off
-            it.indentationLevel = 1
+            if #unavailable(macOS 14) { it.indentationLevel = 1 }
         }
         menu.addItem(.separator())
         let disp = menu.addItem(withTitle: "Only show windows on the current display", action: #selector(toggleCurrentDisplay), keyEquivalent: "")
@@ -961,10 +977,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc func openPrivacy() {
-        let pane = CGPreflightScreenCaptureAccess() ? "Privacy_Accessibility" : "Privacy_ScreenCapture"
+    private func addWarning(_ menu: NSMenu, _ title: String, toolTip: String, action: Selector) {
+        let it = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+        it.target = self
+        it.toolTip = toolTip
+        if #available(macOS 11, *) {
+            it.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Missing permission")
+        } else {
+            it.title = "⚠️ " + title
+        }
+    }
+
+    @objc func showAbout() {
+        let credits = NSMutableAttributedString(string: "A tiny window switcher with live previews.\n")
+        let link = "github.com/Lucifix/TabLite"
+        credits.append(NSAttributedString(string: link, attributes: [.link: URL(string: "https://\(link)")!]))
+        let center = NSMutableParagraphStyle()
+        center.alignment = .center
+        credits.addAttributes([.paragraphStyle: center, .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)],
+                              range: NSRange(location: 0, length: credits.length))
+        NSApp.activate(ignoringOtherApps: true)   // accessory app: otherwise the panel opens behind other windows
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
+    }
+
+    private func openPrivacyPane(_ pane: String) {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!)
     }
+    @objc func openAccessibility() { openPrivacyPane("Privacy_Accessibility") }
+    @objc func openScreenRecording() { openPrivacyPane("Privacy_ScreenCapture") }
 
     @objc func restart() {
         let p = Process()

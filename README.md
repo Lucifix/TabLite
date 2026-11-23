@@ -56,7 +56,7 @@ The switcher opens on the display your mouse pointer is on. By default it lists 
 
 ### Option+Tab or Command+Tab
 
-Pick your shortcut from the TabLite menu bar icon: **Switch with Option+Tab** (default) or **Switch with Command+Tab**.
+Pick your shortcut under **Shortcut** in the TabLite menu bar icon: **Option+Tab** (default) or **Command+Tab**. Turn on **Launch at Login** there too so TabLite starts with your Mac.
 
 With Command+Tab, TabLite replaces the macOS app switcher while it's running, and hands Command+Tab back to macOS when you switch back to Option+Tab, quit, or if TabLite crashes. After a Force Quit, the macOS switcher comes back when you open TabLite again or log out. Two things to know:
 
@@ -97,7 +97,7 @@ On first launch, allow TabLite in **System Settings → Privacy & Security**:
 | **Accessibility** | Catch the shortcut and bring the chosen window to the front |
 | **Screen Recording** | Window previews and titles. Without it, you get app icons and names |
 
-Then choose **Restart TabLite** from its menu bar icon.
+Until both are granted, the menu bar icon shows a **Grant … Access…** item for each missing permission. After granting Screen Recording, choose **Restart TabLite** from the same menu.
 
 ### Launch at Login
 
