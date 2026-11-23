@@ -140,9 +140,52 @@ func captureWithScreenCaptureKit(_ ids: [CGWindowID], maxW: Int, maxH: Int,
     }
 }
 
+/// Private SkyLight framework, opened once. Its functions are looked up at runtime, so a future
+/// macOS that drops one only disables the feature that needs it.
+let skyLight = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY)
+func privateSymbol<T>(_ name: String, as _: T.Type) -> T? {
+    guard let sym = dlsym(skyLight ?? UnsafeMutableRawPointer(bitPattern: -2), name)
+            ?? dlsym(UnsafeMutableRawPointer(bitPattern: -2), name) else { return nil }   // -2 = RTLD_DEFAULT
+    return unsafeBitCast(sym, to: T.self)
+}
+
+// Bring an app to the front exactly like clicking one of its windows does (same calls as AltTab
+// and Hammerspoon). Needed because macOS 14+ often ignores NSRunningApplication.activate from a
+// background app like TabLite ("cooperative activation"), which made quick switches do nothing.
+private typealias GetPSNFn = @convention(c) (pid_t, UnsafeMutablePointer<ProcessSerialNumber>) -> OSStatus
+private typealias SetFrontFn = @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, CGWindowID, UInt32) -> CGError
+private typealias PostRecordFn = @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, UnsafeMutablePointer<UInt8>) -> CGError
+private let getProcessForPID = privateSymbol("GetProcessForPID", as: GetPSNFn.self)
+private let setFrontProcess = privateSymbol("_SLPSSetFrontProcessWithOptions", as: SetFrontFn.self)
+private let postEventRecord = privateSymbol("SLPSPostEventRecordTo", as: PostRecordFn.self)
+
+/// Returns false if the private calls are unavailable, so the caller can fall back to the public API.
+private func bringToFront(_ pid: pid_t, _ wid: CGWindowID) -> Bool {
+    guard let getPSN = getProcessForPID, let setFront = setFrontProcess else { return false }
+    var psn = ProcessSerialNumber()
+    guard getPSN(pid, &psn) == 0 else { return false }
+    _ = setFront(&psn, wid, 0x200)   // 0x200 = kCPSUserGenerated: treated like a user click
+    // Make that window the key window (synthesized window-server event record, as in AltTab).
+    if let post = postEventRecord {
+        var bytes = [UInt8](repeating: 0, count: 0xf8)
+        bytes[0x04] = 0xf8
+        bytes[0x3a] = 0x10
+        withUnsafeBytes(of: wid) { for (i, b) in $0.enumerated() { bytes[0x3c + i] = b } }
+        for i in 0x20..<0x30 { bytes[i] = 0xff }
+        bytes[0x08] = 0x01; _ = post(&psn, &bytes)
+        bytes[0x08] = 0x02; _ = post(&psn, &bytes)
+    }
+    return true
+}
+
+/// Focusing talks to other apps (AX calls can wait up to 0.25 s), so it runs here rather than
+/// inside the keyboard event tap, which must return immediately.
+let focusQueue = DispatchQueue(label: "tablite.focus", qos: .userInteractive)
+
 func focus(_ w: Win) {
-    let app = NSRunningApplication(processIdentifier: w.pid)
-    app?.activate(options: [.activateIgnoringOtherApps])
+    if !bringToFront(w.pid, w.id) {
+        NSRunningApplication(processIdentifier: w.pid)?.activate(options: [.activateIgnoringOtherApps])
+    }
     let ax = AXUIElementCreateApplication(w.pid)
     AXUIElementSetMessagingTimeout(ax, 0.25)
     var ref: CFTypeRef?
@@ -510,7 +553,7 @@ final class Switcher {
         guard active else { return }
         let target = wins.indices.contains(sel) ? wins[sel] : nil
         hide()
-        if let t = target { focus(t) }
+        if let t = target { focusQueue.async { focus(t) } }
     }
 }
 
@@ -549,12 +592,7 @@ var currentDisplayOnly = UserDefaults.standard.bool(forKey: "currentDisplayOnly"
 /// (symbolic hotkey 1 = Command+Tab, 2 = Command+Shift+Tab; lasts until logout).
 /// Looked up at runtime: if a future macOS removes it, the Command+Tab option is simply unavailable.
 private typealias SetHotKeyFn = @convention(c) (Int32, Bool) -> CGError
-private let setSymbolicHotKeyEnabled: SetHotKeyFn? = {
-    let handle = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY)
-    guard let sym = dlsym(handle ?? UnsafeMutableRawPointer(bitPattern: -2), "CGSSetSymbolicHotKeyEnabled")
-    else { return nil }
-    return unsafeBitCast(sym, to: SetHotKeyFn.self)
-}()
+private let setSymbolicHotKeyEnabled = privateSymbol("CGSSetSymbolicHotKeyEnabled", as: SetHotKeyFn.self)
 var commandTabAvailable: Bool { setSymbolicHotKeyEnabled != nil }
 
 func setSystemCommandTab(enabled: Bool) {
