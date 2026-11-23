@@ -26,10 +26,34 @@ struct Win {
     var caption: String { title.isEmpty ? app : title }
 }
 
-func listWindows() -> [Win] {
+/// A display's bounds in the same coordinates as kCGWindowBounds (origin: top-left of the main display).
+func displayBounds(_ s: NSScreen) -> CGRect? {
+    guard let n = s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+    return CGDisplayBounds(CGDirectDisplayID(n.uint32Value))
+}
+
+/// Index of the display that holds the largest part of `r`, or -1 if it's on none of them.
+func homeDisplay(_ r: CGRect, _ displays: [CGRect]) -> Int {
+    var best = -1, bestArea: CGFloat = 0
+    for (i, d) in displays.enumerated() {
+        let x = r.intersection(d)
+        if x.isNull { continue }
+        if x.width * x.height > bestArea { best = i; bestArea = x.width * x.height }
+    }
+    return best
+}
+
+/// Visible windows, front to back. With `screen`, only the windows mostly on that display.
+func listWindows(on screen: NSScreen? = nil) -> [Win] {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     guard let arr = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else { return [] }
     let me = getpid()
+    var displays: [CGRect] = []
+    var target = -1
+    if let screen = screen, NSScreen.screens.count > 1, let tb = displayBounds(screen) {
+        displays = NSScreen.screens.map { displayBounds($0) ?? .null }
+        target = displays.firstIndex(of: tb) ?? -1
+    }
     var regular: [pid_t: Bool] = [:]
     var out: [Win] = []
     for d in arr {
@@ -40,6 +64,7 @@ func listWindows() -> [Win] {
               let w = b["Width"], let h = b["Height"] else { continue }
         let pid = pid_t(pidN)
         if pid == me || w < 90 || h < 60 { continue }
+        if target >= 0 && homeDisplay(CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: w, height: h), displays) != target { continue }
         if let a = d[kCGWindowAlpha as String] as? Double, a < 0.01 { continue }
         let isRegular: Bool
         if let c = regular[pid] { isRegular = c } else {
@@ -403,13 +428,15 @@ final class Switcher {
     }
 
     func begin(reverse: Bool) {
-        let list = listWindows()
+        let m = NSEvent.mouseLocation
+        let here = NSScreen.screens.first { NSMouseInRect(m, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
+        let list = listWindows(on: currentDisplayOnly ? here : nil)
         guard !list.isEmpty else { return }
         wins = list
-        let ids = Set(list.map { $0.id })
+        screen = here
+        // Keep thumbnails of windows on other displays too: switching displays shouldn't refetch them.
+        let ids = Set((currentDisplayOnly ? listWindows() : list).map { $0.id })
         cache = cache.filter { ids.contains($0.key) }
-        let m = NSEvent.mouseLocation
-        screen = NSScreen.screens.first { NSMouseInRect(m, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
         layout = Layout.make(count: wins.count, screen: screen)
         sel = reverse ? wins.count - 1 : min(1, wins.count - 1)
         active = true
@@ -512,6 +539,11 @@ enum Shortcut: String {
 
 /// Active shortcut, cached so the event tap never touches UserDefaults.
 private var trigger = Shortcut.saved
+
+/// Show only the windows on the display under the mouse (where the panel opens). Off by default.
+var currentDisplayOnly = UserDefaults.standard.bool(forKey: "currentDisplayOnly") {
+    didSet { UserDefaults.standard.set(currentDisplayOnly, forKey: "currentDisplayOnly") }
+}
 
 /// Private SkyLight function that turns macOS's own Command+Tab app switcher on or off
 /// (symbolic hotkey 1 = Command+Tab, 2 = Command+Shift+Tab; lasts until logout).
@@ -702,6 +734,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         applyShortcut()
     }
 
+    @objc func toggleCurrentDisplay() { currentDisplayOnly.toggle() }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let ax = AXIsProcessTrusted(), sr = CGPreflightScreenCaptureAccess()
@@ -724,6 +758,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             it.state = trigger == s ? .on : .off
             it.indentationLevel = 1
         }
+        menu.addItem(.separator())
+        let disp = menu.addItem(withTitle: "Only show windows on the current display", action: #selector(toggleCurrentDisplay), keyEquivalent: "")
+        disp.target = self
+        disp.state = currentDisplayOnly ? .on : .off
         menu.addItem(.separator())
         let login = menu.addItem(withTitle: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
         login.target = self
