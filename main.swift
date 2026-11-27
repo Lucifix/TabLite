@@ -43,6 +43,31 @@ func homeDisplay(_ r: CGRect, _ displays: [CGRect]) -> Int {
     return best
 }
 
+/// Accessibility verdicts per window ID ("is this a real document window?"). A window's subrole
+/// never changes, so each window costs one AX round trip to its app in its lifetime.
+var axVerdict: [CGWindowID: Bool] = [:]
+
+/// Fills `axVerdict` for the app's current windows. Returns false if the app couldn't be asked
+/// (no Accessibility permission, app not responding), in which case the caller keeps its windows.
+func loadAXVerdicts(_ pid: pid_t) -> Bool {
+    let ax = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(ax, 0.1)
+    var ref: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(ax, kAXWindowsAttribute as CFString, &ref) == .success,
+          let list = ref as? [AXUIElement] else { return false }
+    for win in list {
+        var id: CGWindowID = 0
+        guard _AXUIElementGetWindow(win, &id) == .success, id != 0 else { continue }
+        // Same rule as AltTab/DockDoor. Rejects palettes, popovers and e.g. Chrome's find bar,
+        // which is AXUnknown but does have a title ("Find in page").
+        var sub: CFTypeRef?
+        AXUIElementCopyAttributeValue(win, kAXSubroleAttribute as CFString, &sub)
+        let s = sub as? String ?? ""
+        axVerdict[id] = s == kAXStandardWindowSubrole as String || s == kAXDialogSubrole as String
+    }
+    return true
+}
+
 /// Visible windows, front to back. With `screen`, only the windows mostly on that display.
 func listWindows(on screen: NSScreen? = nil) -> [Win] {
     let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
@@ -55,6 +80,8 @@ func listWindows(on screen: NSScreen? = nil) -> [Win] {
         target = displays.firstIndex(of: tb) ?? -1
     }
     var regular: [pid_t: Bool] = [:]
+    var axAsked = Set<pid_t>(), axFailed = Set<pid_t>()   // at most one AX query per app per call
+    if axVerdict.count > 1000 { axVerdict.removeAll() }   // closed windows' IDs are never reused
     var out: [Win] = []
     for d in arr {
         guard (d[kCGWindowLayer as String] as? Int) == 0,
@@ -72,6 +99,12 @@ func listWindows(on screen: NSScreen? = nil) -> [Win] {
             regular[pid] = isRegular
         }
         if !isRegular { continue }
+        // Keep only windows the app reports as standard windows or dialogs (see loadAXVerdicts).
+        // Windows missing from its AX list are dropped but not cached: a window opened a moment
+        // ago may not be listed yet.
+        let wid = CGWindowID(num)
+        if axVerdict[wid] == nil, axAsked.insert(pid).inserted, !loadAXVerdicts(pid) { axFailed.insert(pid) }
+        if !axFailed.contains(pid), axVerdict[wid] != true { continue }
         out.append(Win(id: CGWindowID(num), pid: pid,
                        app: d[kCGWindowOwnerName as String] as? String ?? "",
                        title: d[kCGWindowName as String] as? String ?? ""))
